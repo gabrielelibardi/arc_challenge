@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import multiprocessing as mp
+from torch.nn.parameter import Parameter
 
 
 
@@ -37,33 +38,32 @@ class CAModelRecurrent(nn.Module):
             x = self.transition(torch.softmax(x, dim=1))
         return x
 
-class LSTMCell:
-
+class LSTMCell(nn.Module):
     def __init__(self, input_size, hidden_size):
-        self.input_size=input_size
-        self.W_full = torch.FloatTensor(input_size + hidden_size, 
-        hidden_size*4).type(dtype).to(device)
-        init.normal(self.W_full, 0.0, 0.4)
-        self.W_full = Variable(self.W_full, requires_grad = True)
-        self.bias=1.0
-        self.forget_bias=1.0
+        super(LSTMCell, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.weight_ih = Parameter(torch.randn(4 * hidden_size, input_size))
+        self.weight_hh = Parameter(torch.randn(4 * hidden_size, hidden_size))
+        self.bias_ih = Parameter(torch.randn(4 * hidden_size))
+        self.bias_hh = Parameter(torch.randn(4 * hidden_size))
 
-    def __call__(self, x, h, c):
+    def forward(self, input, state):
+        # type: (Tensor, Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]
+        hx, cx = state
+        gates = (torch.mm(input, self.weight_ih.t()) + self.bias_ih +
+                 torch.mm(hx, self.weight_hh.t()) + self.bias_hh)
+        ingate, forgetgate, cellgate, outgate = gates.chunk(4, 1)
 
-        concat = torch.cat((x, h), dim=1)
-        hidden = torch.matmul(concat, self.W_full)+self.bias
+        ingate = torch.sigmoid(ingate)
+        forgetgate = torch.sigmoid(forgetgate)
+        cellgate = torch.tanh(cellgate)
+        outgate = torch.sigmoid(outgate)
 
-        i, g, f, o = torch.chunk(hidden, 4, dim=1)
+        cy = (forgetgate * cx) + (ingate * cellgate)
+        hy = outgate * torch.tanh(cy)
 
-        i = torch.sigmoid(i)
-        g = torch.tanh(g)
-        f = torch.sigmoid(f+self.forget_bias)
-        o = torch.sigmoid(o)
-
-        new_c = torch.mul(c, f) + torch.mul(g, i)
-        new_h = torch.mul(torch.tanh(new_c), o)
-
-        return new_h, new_c
+        return hy, cy
     
     
 class CAModelMeta(nn.Module):
@@ -75,19 +75,31 @@ class CAModelMeta(nn.Module):
         self.transition = nn.Sequential(
             nn.Linear(self.n_channels*self.kernel_size**2, 128),
             nn.ReLU(),
-            nn.Linear(128, self.n_channels)
+            nn.Linear(128, self.n_channels) 
         )
+        self.lstm = LSTMCell(self.n_channels, self.n_channels)
+        self.output_lyr = nn.Sequential(nn.Linear(self.n_channels, self.n_channels))
+            
+        
+    def forward_lstm(self, x, h,c):
+        x = self.transition(x)
+        h, c = self.lstm(x,(h,c))
+        return self.output_lyr(h), h, c
         
     def forward(self, x, steps=1):
+        hx = torch.zeros(x.shape)
+        cx = torch.zeros(x.shape)
         for _ in range(steps):
-            x = self.convolve(torch.softmax(x, dim=1))
+            x, hx, cx = self.convolve(torch.softmax(x, dim=1), torch.softmax(hx, dim=1), torch.softmax(cx, dim=1))
         return x
     
-    def convolve(self, x, steps=1):
+    def convolve(self, x, h, c, steps=1):
 
-        windows = F.unfold(x, kernel_size=3, stride = 1, padding = 1)
-        output = self.transition(windows.permute([2,0,1]))
-        return output.permute(1,2,0).view(x.shape)
+        windows_x = F.unfold(x, kernel_size=3, stride = 1, padding = 1)
+        windows_h = F.unfold(h, kernel_size=3, stride = 1, padding = 1)
+        windows_c = F.unfold(c, kernel_size=3, stride = 1, padding = 1)
+        y, h, c = self.forward_lstm(windows_x.permute([2,0,1]), windows_h.permute([2,0,1]), windows_c.permute([2,0,1]))
+        return y.permute(1,2,0).view(x.shape), h.permute(1,2,0).view(x.shape), c.permute(1,2,0).view(x.shape)
         
         
     
