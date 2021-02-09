@@ -38,38 +38,68 @@ class CAModelRecurrent(nn.Module):
             x = self.transition(torch.softmax(x, dim=1))
         return x
 
-class LSTMCell(nn.Module):
-    def __init__(self, input_size, hidden_size):
-        super(LSTMCell, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.weight_ih = Parameter(torch.randn(4 * hidden_size, input_size))
-        self.weight_hh = Parameter(torch.randn(4 * hidden_size, hidden_size))
-        self.bias_ih = Parameter(torch.randn(4 * hidden_size))
-        self.bias_hh = Parameter(torch.randn(4 * hidden_size))
+""" Code stolen from here: https://github.com/ndrplz/ConvLSTM_pytorch/blob/master/convlstm.py
+"""    
+class ConvLSTMCell(nn.Module):
 
-    def forward(self, input, state):
-        # type: (Tensor, Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]
-        hx, cx = state
-        gates = (torch.mm(input, self.weight_ih.t()) + self.bias_ih +
-                 torch.mm(hx, self.weight_hh.t()) + self.bias_hh)
-        ingate, forgetgate, cellgate, outgate = gates.chunk(4, 1)
+    def __init__(self, input_dim, hidden_dim, kernel_size, bias=True):
+        """
+        Initialize ConvLSTM cell.
+        Parameters
+        ----------
+        input_dim: int
+            Number of channels of input tensor.
+        hidden_dim: int
+            Number of channels of hidden state.
+        kernel_size: (int, int)
+            Size of the convolutional kernel.
+        bias: bool
+            Whether or not to add the bias.
+        """
 
-        ingate = torch.sigmoid(ingate)
-        forgetgate = torch.sigmoid(forgetgate)
-        cellgate = torch.tanh(cellgate)
-        outgate = torch.sigmoid(outgate)
+        super(ConvLSTMCell, self).__init__()
 
-        cy = (forgetgate * cx) + (ingate * cellgate)
-        hy = outgate * torch.tanh(cy)
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
 
-        return hy, cy
+        self.kernel_size = kernel_size
+        self.padding = kernel_size[0] // 2, kernel_size[1] // 2
+        self.bias = bias
+
+        self.conv = nn.Conv2d(in_channels=self.input_dim + self.hidden_dim,
+                              out_channels=4 * self.hidden_dim,
+                              kernel_size=self.kernel_size,
+                              padding=self.padding,
+                              bias=self.bias)
+
+    def forward(self, input_tensor, cur_state):
+        h_cur, c_cur = cur_state
+
+        combined = torch.cat([input_tensor, h_cur], dim=1)  # concatenate along channel axis
+
+        combined_conv = self.conv(combined)
+        cc_i, cc_f, cc_o, cc_g = torch.split(combined_conv, self.hidden_dim, dim=1)
+        i = torch.sigmoid(cc_i)
+        f = torch.sigmoid(cc_f)
+        o = torch.sigmoid(cc_o)
+        g = torch.tanh(cc_g)
+
+        c_next = f * c_cur + i * g
+        h_next = o * torch.tanh(c_next)
+
+        return h_next, c_next
+
+    def init_hidden(self, batch_size, image_size):
+        height, width = image_size
+        return (torch.zeros(batch_size, self.hidden_dim, height, width, device=self.conv.weight.device),
+                torch.zeros(batch_size, self.hidden_dim, height, width, device=self.conv.weight.device))
     
     
-class CAModelMeta(nn.Module):
-    def __init__(self, num_states, n_channels=11):
-        super(CAModelMeta, self).__init__()
-        self.n_channels = n_channels
+    
+class CAModelConvLSTM(nn.Module):
+    def __init__(self, num_states):
+        super(CAModelConvLSTM, self).__init__()
+        self.n_channels = num_states
         self.kernel_size = 3
         # First step rewrite transition using torch.nn.Unfold
         self.transition = nn.Sequential(
@@ -77,29 +107,21 @@ class CAModelMeta(nn.Module):
             nn.ReLU(),
             nn.Linear(128, self.n_channels) 
         )
-        self.lstm = LSTMCell(self.n_channels, self.n_channels)
-        self.output_lyr = nn.Sequential(nn.Linear(self.n_channels, self.n_channels))
-            
+        self.lstm = ConvLSTMCell(self.n_channels,self.n_channels, [3,3])
+        self.output_lyr = nn.Conv2d(self.n_channels, self.n_channels, kernel_size=1)
         
-    def forward_lstm(self, x, h,c):
-        x = self.transition(x)
+            
+    def forward_lstm(self, x, h, c):
         h, c = self.lstm(x,(h,c))
         return self.output_lyr(h), h, c
         
     def forward(self, x, steps=1):
-        hx = torch.zeros(x.shape)
-        cx = torch.zeros(x.shape)
+        hx = torch.zeros(x.shape).to('cuda:0')
+        cx = torch.zeros(x.shape).to('cuda:0')
+                                 
         for _ in range(steps):
-            x, hx, cx = self.convolve(torch.softmax(x, dim=1), torch.softmax(hx, dim=1), torch.softmax(cx, dim=1))
+            x, hx, cx = self.forward_lstm(torch.softmax(x, dim=1), torch.softmax(hx, dim=1), torch.softmax(cx, dim=1))                   
         return x
     
-    def convolve(self, x, h, c, steps=1):
-
-        windows_x = F.unfold(x, kernel_size=3, stride = 1, padding = 1)
-        windows_h = F.unfold(h, kernel_size=3, stride = 1, padding = 1)
-        windows_c = F.unfold(c, kernel_size=3, stride = 1, padding = 1)
-        y, h, c = self.forward_lstm(windows_x.permute([2,0,1]), windows_h.permute([2,0,1]), windows_c.permute([2,0,1]))
-        return y.permute(1,2,0).view(x.shape), h.permute(1,2,0).view(x.shape), c.permute(1,2,0).view(x.shape)
-        
         
     
