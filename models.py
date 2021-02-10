@@ -123,5 +123,69 @@ class CAModelConvLSTM(nn.Module):
             x, hx, cx = self.forward_lstm(torch.softmax(x, dim=1), torch.softmax(hx, dim=1), torch.softmax(cx, dim=1))                   
         return x
     
+class MetaConvLSTM_CA(nn.Module):
+    def __init__(self, num_states):
+        super(MetaConvLSTM_CA, self).__init__()
+        self.n_channels = num_states
+        self.kernel_size = 3
+        # First step rewrite transition using torch.nn.Unfold
+        self.transition = nn.Sequential(
+            nn.Linear(self.n_channels*self.kernel_size**2, 128),
+            nn.ReLU(),
+            nn.Linear(128, self.n_channels) 
+        )
+        
+        self.conv_lstm = ConvLSTMCell(self.n_channels,100, [3,3])
+        self.lstm = nn.LSTMCell(100,100)
+        self.output_lyr = nn.Conv2d(100, self.n_channels, kernel_size=1)
+        self.cnn = nn.Sequential(
+            nn.Conv2d(num_states*2, 20, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(20, 20, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(20, 20, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(20, 20, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(20*30*30, 100)
+        )
+        
+            
+    def forward_lstm(self, x, h, c):
+        h, c = self.conv_lstm(x,(h,c))
+        return self.output_lyr(h), h, c
+        
+    def forward(self, X, x, steps=1):
+        h = torch.zeros([1,100]).to('cuda:0')
+        c = torch.zeros([1,100]).to('cuda:0')
+        X = self.cnn(X)
+        for X_idx in range(X.shape[0]):
+            input_X = X[X_idx].unsqueeze(0)
+            
+            h,c = self.lstm(input_X, (h,c))
+        
+   
+        z_task = h.unsqueeze(-1).unsqueeze(-1).repeat([1,1,30,30])
+        hx = z_task
+        #hx = torch.zeros(x.shape).to('cuda:0')
+        cx = torch.zeros(z_task.shape).to('cuda:0')
+                                
+        for _ in range(steps):
+            x, hx, cx = self.forward_lstm(torch.softmax(x, dim=1), hx, cx)
+        
+        return x    
+    
+    def forward_imgs(self, X):
+    
+        """
+        X: list[ Tensor[batch_size, n_channels,*], ..., ..]
+            List with all the images in the examples of the task          
+        """
+        for x in X:
+            print('asda')
+            
+            
+
         
     

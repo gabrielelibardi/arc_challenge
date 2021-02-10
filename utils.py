@@ -12,7 +12,7 @@ def inp2img(inp):
     for i in range(11):
         img[i] = (inp==i)
     return img
-
+            
 
 def check_max_rows_cols(data):
     max_cols = 0
@@ -26,7 +26,15 @@ def check_max_rows_cols(data):
 
             max_cols = max(max_cols, x.shape[0], y.shape[0])
             max_rows = max(max_rows, x.shape[1], y.shape[1])
-     
+            
+        for sample in task['test']:
+
+            x = torch.Tensor(sample['input'])
+            y = torch.Tensor(sample['output'])
+
+            max_cols = max(max_cols, x.shape[0], y.shape[0])
+            max_rows = max(max_rows, x.shape[1], y.shape[1])
+
     return max_cols, max_rows
 
 def add_padding(tensor, max_cols, max_rows):
@@ -59,5 +67,14 @@ def pad_all_tensors(data, max_cols, max_rows):
             y_padded = add_padding(y, max_cols, max_rows)
             data[idx1]['train'][idx2]['input'] = x_padded
             data[idx1]['train'][idx2]['output'] = y_padded
+            
+        for idx3, sample in enumerate(data[idx1]['test']):
+
+            x = np.array(sample['input'])
+            y = np.array(sample['output'])
+            x_padded = add_padding(x, max_cols, max_rows)
+            y_padded = add_padding(y, max_cols, max_rows)
+            data[idx1]['test'][idx3]['input'] = x_padded
+            data[idx1]['test'][idx3]['output'] = y_padded
             
             

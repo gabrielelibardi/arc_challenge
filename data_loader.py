@@ -19,7 +19,10 @@ class DatasetARC(Dataset):
         self.max_cols, self.max_rows = check_max_rows_cols(self.train_tasks)
         pad_all_tensors(self.train_tasks, self.max_cols, self.max_rows)
 
-
+    def __len__(self):
+        print(len(self.train_tasks))
+        return len(self.train_tasks)
+        
     def __getitem__(self, idx):
         return self.train_tasks[idx]
 
