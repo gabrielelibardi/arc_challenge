@@ -4,8 +4,6 @@ import torch.nn.functional as F
 import multiprocessing as mp
 from torch.nn.parameter import Parameter
 
-
-
 class CAModel(nn.Module):
     def __init__(self, num_states):
         super(CAModel, self).__init__()
@@ -135,9 +133,10 @@ class MetaConvLSTM_CA(nn.Module):
             nn.Linear(128, self.n_channels) 
         )
         
-        self.conv_lstm = ConvLSTMCell(self.n_channels,100, [3,3])
-        self.lstm = nn.LSTMCell(100,100)
-        self.output_lyr = nn.Conv2d(100, self.n_channels, kernel_size=1)
+        self.conv_lstm_1 = ConvLSTMCell(self.n_channels,200, [3,3])
+        #self.conv_lstm_2 = ConvLSTMCell(200,50, [5,5])
+        self.lstm = nn.LSTMCell(200,200)
+        self.output_lyr = nn.Conv2d(200, self.n_channels, kernel_size=1)
         self.cnn = nn.Sequential(
             nn.Conv2d(num_states*2, 20, kernel_size=3, padding=1),
             nn.ReLU(),
@@ -148,31 +147,35 @@ class MetaConvLSTM_CA(nn.Module):
             nn.Conv2d(20, 20, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(20*30*30, 100)
+            nn.Linear(20*30*30, 200)
         )
         
             
-    def forward_lstm(self, x, h, c):
-        h, c = self.conv_lstm(x,(h,c))
-        return self.output_lyr(h), h, c
+    def forward_lstm(self, x, h1, c1):
+        h1, c1 = self.conv_lstm_1(x,(h1,c1))
+        return self.output_lyr(h1), h1, c1
         
     def forward(self, X, x, steps=1):
-        h = torch.zeros([1,100]).to('cuda:0')
-        c = torch.zeros([1,100]).to('cuda:0')
+        h = torch.zeros([1,200]).to('cuda:0')
+        c = torch.zeros([1,200]).to('cuda:0')
         X = self.cnn(X)
         for X_idx in range(X.shape[0]):
             input_X = X[X_idx].unsqueeze(0)
             
             h,c = self.lstm(input_X, (h,c))
         
-   
-        z_task = h.unsqueeze(-1).unsqueeze(-1).repeat([1,1,30,30])
-        hx = z_task
-        #hx = torch.zeros(x.shape).to('cuda:0')
-        cx = torch.zeros(z_task.shape).to('cuda:0')
+        hx_1 = h.unsqueeze(-1).unsqueeze(-1).repeat([1,1,30,30])
+        cx_1 = c.unsqueeze(-1).unsqueeze(-1).repeat([1,1,30,30])
+
+        #hx.register_hook(lambda x: print(x.max(), x.min()))
+        #cx.register_hook(lambda x: print(x.max(), x.min()))
+        
+        #hx_2 = torch.zeros([1,50,30,30]).to('cuda:0')
+        #cx_2 = torch.zeros([1,50,30,30]).to('cuda:0')
                                 
         for _ in range(steps):
-            x, hx, cx = self.forward_lstm(torch.softmax(x, dim=1), hx, cx)
+            dx, hx_1, cx_1, = self.forward_lstm(torch.softmax(x, dim=1), hx_1, cx_1)
+            x = x + dx 
         
         return x    
     

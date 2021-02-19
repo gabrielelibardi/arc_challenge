@@ -1,10 +1,15 @@
 import torch
 import numpy as np
-from data_loader import DatasetARC
+from data_loader import DatasetARC, DatasetARC_Test
 from models import CAModel, CAModelConvLSTM, MetaConvLSTM_CA
 import torch.nn as nn
 import torch.nn.functional as F
-from utils import inp2img
+from utils import inp2img, LossWriter, img_logger, save_model
+import os
+import sys
+import argparse
+import json
+import random
 
 
 def solve_tasks(tasks):
@@ -54,7 +59,7 @@ def solve_task(task, max_steps=40, recurrent=True):
             losses[(num_steps - 1) * num_epochs + e] = loss.item()
 
             if e % 100 == 0:
-                print('Loss:',loss)
+                print('Loss:',loss.item())
             
             if loss < 0.0001:
                 break
@@ -63,72 +68,129 @@ def solve_task(task, max_steps=40, recurrent=True):
     return model, num_steps, losses
 
 
-def tensorize_concatenate(sample):
+def tensorize_concatenate(sample, device):
     x = torch.from_numpy(inp2img(sample["input"])).unsqueeze(0).float().to(device)
     y = torch.from_numpy(inp2img(sample["output"])).unsqueeze(0).float().to(device)
     cat = torch.cat([x,y], dim= 1)
     return cat
 
 
-def meta_solve_task(tasks, max_steps=20, recurrent=True):
+def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = '', load_model=None):
     
     if recurrent:
         model = MetaConvLSTM_CA(11).to(device)
     else:
         model = CAModel(11).to(device)
         
+    if load_model:
+        model.load_state_dict(torch.load(load_model, map_location=device))
+        
     model = model.train()
     num_epochs = 1000000
     batch_size = 20
     criterion = nn.CrossEntropyLoss()
+    loss_writer = LossWriter(log_dir, fieldnames = ('epoch','train_loss', 'val_loss'))
+    img_writer = img_logger(log_dir)
     losses = np.zeros((max_steps - 1) * num_epochs)
     
     for e in range(num_epochs):
         optimizer = torch.optim.Adam(model.parameters(), lr=(0.0001))
         optimizer.zero_grad()
         loss = 0.0
-        n_tasks = 0
-        
-        for idx_task, task in enumerate(tasks):
-
-            X = torch.cat([tensorize_concatenate(sample) for sample in task['train']], dim=0)
-            n_tasks += 1
+        epoch_loss = 0.0
+        rand_idxs = random.sample(range(0, len(tasks)), len(tasks)) 
+        for ii, idx_task in enumerate(rand_idxs):
+            task = tasks[idx_task]
+            X = torch.cat([tensorize_concatenate(sample, device) for sample in task['train']], dim=0)
             test_x = torch.from_numpy(inp2img(task['test'][0]['input'])).unsqueeze(0).float().to(device)
             test_y = torch.from_numpy(task['test'][0]['output']).unsqueeze(0).long().to(device)
             y_pred = model(X, test_x, max_steps)
-
+            
             loss += criterion(y_pred, test_y)
-            #print('Task loss:',criterion(y_pred, test_y))
+            
+            if e % 100 == 0:
+                img_writer.save_imgs(idx_task, task, y_pred, criterion(y_pred, test_y).detach().cpu().item())
 
-            # predit output from output
-            # enforces stability after solution is reached
-#                 y_in = torch.from_numpy(inp2img(task['test'][0]["output"])).unsqueeze(0).float().to(device)
-#                 y_pred = model(X, y_in, 1) 
-#                 loss += criterion(y_pred, test_y)
+            
                 
-            if idx_task % batch_size == 0:
+            if ii % batch_size == 0:
                 loss.backward()
+                epoch_loss += loss
+                loss = 0.0
+                
+            if ii % batch_size*4 == 0:
                 optimizer.step()
                 optimizer.zero_grad()
-                loss = 0.0
-                n_tasks = 0
-                
 
-        #losses[(num_steps - 1) * num_epochs + e] = loss.item()
+      
+        if e % 100 == 0:
+            save_model(model, os.path.join(log_dir + "/models/","arc.state_dict"), e)
+            
+        if e % 10 == 0:
+            ## EVALUATE
+            model.eval()
+            val_loss = 0.0
+            rand_idxs = random.sample(range(0, len(val_tasks)), len(val_tasks))
+            with torch.no_grad():
+                for ii, idx_task in enumerate(rand_idxs):
+                    val_task = val_tasks[idx_task]
+                    X = torch.cat([tensorize_concatenate(sample, device) for sample in val_task['train']], dim=0)
+                    test_x = torch.from_numpy(inp2img(val_task['test'][0]['input'])).unsqueeze(0).float().to(device)
+                    test_y = torch.from_numpy(val_task['test'][0]['output']).unsqueeze(0).long().to(device)
+                    y_pred = model(X, test_x, max_steps)
+                    if e % 100 == 0:
+                        img_writer.save_imgs(len(tasks) + idx_task, val_task, y_pred,  criterion(y_pred, test_y).detach().cpu().item())
 
+                    val_loss += criterion(y_pred, test_y)
+            val_loss /= batch_size
+            print('VAL LOSS', val_loss)
+            
         if e % 1 == 0:
-            print('Loss:',loss)
+            epoch_loss /= (400/batch_size)
+            print('Loss:',epoch_loss.item())
+            training_info = {'epoch': e, 'train_loss': epoch_loss.item(), 'val_loss':val_loss.item()}
+            loss_writer.write_row(training_info)
+            
+            model.train()
+            
+        
 
     print('------------------FINAL LOSS:', loss, '-------------------------------')      
     return model, num_steps, losses
 
+def get_args():
+    parser = argparse.ArgumentParser(description='RL')
+    parser.add_argument(
+        '--lr', type=float, default=7e-4, help='learning rate (default: 7e-4)')
+    parser.add_argument(
+        '--log-dir',default='',help='Log dir')
+    parser.add_argument(
+        '--data-dir',default='data/abstraction-and-reasoning-challenge',help='Log dir') 
+    parser.add_argument(
+        '--load-model',default=None,help='directory with the dir to load the model') 
+    
+    args = parser.parse_args() 
+    
+    args.log_dir = os.path.expanduser(args.log_dir)
+    
+    return args
+
+
+
 
 
 if __name__ == '__main__':
-    
-    dir_path = 'data/abstraction-and-reasoning-challenge'
-    tasks = DatasetARC(dir_path)
+    args = get_args()
+    args_dict = vars(args)
+
+    os.system("mkdir "+ args.log_dir)
+    json.dump(args_dict, open(os.path.join(args.log_dir, "training_arguments.json"), "w"), indent=4)
+    #os.system("cp "+__file__+ " " + args.log_dir + "/"+__file__ )
+    os.system("mkdir "+ args.log_dir + "/models")
+    os.system("mkdir "+ args.log_dir + "/imgs")
+
+    train_tasks = DatasetARC(args.data_dir)
+    test_tasks = DatasetARC_Test(args.data_dir)
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    #solve_tasks(tasks)
-    meta_solve_task(tasks)
+    meta_solve_task(train_tasks, test_tasks, log_dir = args.log_dir,load_model = args.load_model)
     
