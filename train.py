@@ -159,7 +159,7 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
     return model, num_steps, losses
 
 def get_args():
-    parser = argparse.ArgumentParser(description='RL')
+    parser = argparse.ArgumentParser(description='ARC')
     parser.add_argument(
         '--lr', type=float, default=7e-4, help='learning rate (default: 7e-4)')
     parser.add_argument(

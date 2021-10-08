@@ -12,7 +12,7 @@ class DatasetARC(Dataset):
     """
 
     def __init__(self, dir_path):
-
+        
         data_path = Path(dir_path)
         train_path = data_path / 'training'
         self.train_tasks = [json.load(task.open()) for task in train_path.iterdir() ]
