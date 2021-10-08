@@ -11,9 +11,9 @@ import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
 
 
-
 def augment(tasks):
     # bottom up flipping
+    # check am I doing only bottom up flipping, if yes then why not left right instead?
     augmented_tasks = []
     for task in tasks:
         augmended_task = {'train':[], 'test':[]}

@@ -16,6 +16,8 @@ class DatasetARC(Dataset):
         data_path = Path(dir_path)
         train_path = data_path / 'training'
         self.train_tasks = [json.load(task.open()) for task in train_path.iterdir() ]
+        # add filter grid size
+
         augmented_tasks = augment(self.train_tasks)
         self.train_tasks += augmented_tasks
         self.max_cols, self.max_rows = check_max_rows_cols(self.train_tasks)
