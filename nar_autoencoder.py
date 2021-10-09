@@ -104,8 +104,6 @@ class NARAutoencoder(nn.Module):
 
     def forward(self, x):
         h = self.encode(x)
-        print(h.shape, 'hidden state shape')
-
         return self.decode(h)
 
     def encode(self, x):

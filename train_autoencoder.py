@@ -94,21 +94,12 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
             loss = criterion(y_pred, X)
             loss.backward()
             #import ipdb; ipdb.set_trace()
-            
-            # if e % 100 == 0:
-            #     img_writer.save_imgs(idx_task, task, y_pred, criterion(y_pred, test_y).detach().cpu().item())
 
-            
-                
-            # if ii % batch_size == 0:
-            #     loss.backward()
-            #     epoch_loss += loss
-            #     loss = 0.0
-                
-            #if ii % batch_size*4 == 0:
-            optimizer.step()
-            optimizer.zero_grad()
-            loss = 0.0
+            if ii % batch_size == 0:
+                print(loss)
+                optimizer.step()
+                optimizer.zero_grad()
+                loss = 0.0
 
         # if e % 100 == 0:
         #     save_model(model, os.path.join(log_dir + "/models/","arc.state_dict"), e)
