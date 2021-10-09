@@ -25,58 +25,6 @@ def solve_tasks(tasks):
         solve_task(task)
 
 
-def solve_task(task, max_steps=40, recurrent=True):
-    
-    if recurrent:
-        model = CAModelConvLSTM(11).to(device)
-    else:
-        model = CAModel(11).to(device)
-
-
-    
-    model = model.train()
-    num_epochs = 500
-    criterion = nn.CrossEntropyLoss()
-    losses = np.zeros((max_steps - 1) * num_epochs)
-
-    for num_steps in range(1, max_steps):
-        optimizer = torch.optim.Adam(model.parameters(), lr=(0.1))
-        print((0.1 / (num_steps * 10)))
-        for e in range(num_epochs):
-            optimizer.zero_grad()
-            loss = 0.0
-
-            for sample in task['train']:
-                # predict output from input
-                x = torch.from_numpy(inp2img(sample["input"])).unsqueeze(0).float().to(device)
-                y = torch.from_numpy(sample["output"]).unsqueeze(0).long().to(device)
-                
-                y_pred = model(x, num_steps)
-                
-                loss += criterion(y_pred, y)
-                
-                # predit output from output
-                # enforces stability after solution is reached
-                y_in = torch.from_numpy(inp2img(sample["output"])).unsqueeze(0).float().to(device)
-                y_pred = model(y_in, 1) 
-                loss += criterion(y_pred, y)
-                
-
-            loss.backward()
-            optimizer.step()
-            
-            losses[(num_steps - 1) * num_epochs + e] = loss.item()
-
-            if e % 100 == 0:
-                print('Loss:',loss.item())
-            
-            if loss < 0.0001:
-                break
-                
-    print('------------------FINAL LOSS:', loss, '-------------------------------')      
-    return model, num_steps, losses
-
-
 def tensorize_concatenate(sample, device):
     x = torch.from_numpy(inp2img(sample["input"])).unsqueeze(0).float().to(device)
     y = torch.from_numpy(inp2img(sample["output"])).unsqueeze(0).float().to(device)
@@ -119,12 +67,11 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
         
     # if load_model:
     #     model.load_state_dict(torch.load(load_model, map_location=device))
-
-    model = NARAutoencoder(11).to(device)
+    model = NARAutoencoder(11).to(device) 
     model = model.train()
     num_epochs = 1000000
     batch_size = 20
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.BCELoss()
     loss_writer = LossWriter(log_dir, fieldnames = ('epoch','train_loss', 'val_loss'))
     img_writer = img_logger(log_dir)
     losses = np.zeros((max_steps - 1) * num_epochs)
@@ -142,54 +89,56 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
             test_x = torch.from_numpy(inp2img(task['test'][0]['input'])).unsqueeze(0).float().to(device)
             test_y = torch.from_numpy(task['test'][0]['output']).unsqueeze(0).long().to(device)
             # for now we don't include test_x in the autoencoder training
-            y_pred = model(X, max_steps)
+            y_pred = model(X)
             
-            loss += criterion(y_pred, test_y)
+            loss = criterion(y_pred, X)
+            loss.backward()
+            #import ipdb; ipdb.set_trace()
             
-            if e % 100 == 0:
-                img_writer.save_imgs(idx_task, task, y_pred, criterion(y_pred, test_y).detach().cpu().item())
+            # if e % 100 == 0:
+            #     img_writer.save_imgs(idx_task, task, y_pred, criterion(y_pred, test_y).detach().cpu().item())
 
             
                 
-            if ii % batch_size == 0:
-                loss.backward()
-                epoch_loss += loss
-                loss = 0.0
+            # if ii % batch_size == 0:
+            #     loss.backward()
+            #     epoch_loss += loss
+            #     loss = 0.0
                 
-            if ii % batch_size*4 == 0:
-                optimizer.step()
-                optimizer.zero_grad()
+            #if ii % batch_size*4 == 0:
+            optimizer.step()
+            optimizer.zero_grad()
+            loss = 0.0
 
-      
-        if e % 100 == 0:
-            save_model(model, os.path.join(log_dir + "/models/","arc.state_dict"), e)
+        # if e % 100 == 0:
+        #     save_model(model, os.path.join(log_dir + "/models/","arc.state_dict"), e)
             
-        if e % 10 == 0:
-            ## EVALUATE
-            model.eval()
-            val_loss = 0.0
-            rand_idxs = random.sample(range(0, len(val_tasks)), len(val_tasks))
-            with torch.no_grad():
-                for ii, idx_task in enumerate(rand_idxs):
-                    val_task = val_tasks[idx_task]
-                    X = torch.cat([tensorize_concatenate(sample, device) for sample in val_task['train']], dim=0)
-                    test_x = torch.from_numpy(inp2img(val_task['test'][0]['input'])).unsqueeze(0).float().to(device)
-                    test_y = torch.from_numpy(val_task['test'][0]['output']).unsqueeze(0).long().to(device)
-                    y_pred = model(X, test_x, max_steps)
-                    if e % 100 == 0:
-                        img_writer.save_imgs(len(tasks) + idx_task, val_task, y_pred,  criterion(y_pred, test_y).detach().cpu().item())
+        # if e % 10 == 0:
+        #     ## EVALUATE
+        #     model.eval()
+        #     val_loss = 0.0
+        #     rand_idxs = random.sample(range(0, len(val_tasks)), len(val_tasks))
+        #     with torch.no_grad():
+        #         for ii, idx_task in enumerate(rand_idxs):
+        #             val_task = val_tasks[idx_task]
+        #             X = torch.cat([tensorize_concatenate(sample, device) for sample in val_task['train']], dim=0)
+        #             test_x = torch.from_numpy(inp2img(val_task['test'][0]['input'])).unsqueeze(0).float().to(device)
+        #             test_y = torch.from_numpy(val_task['test'][0]['output']).unsqueeze(0).long().to(device)
+        #             y_pred = model(X, test_x, max_steps)
+        #             if e % 100 == 0:
+        #                 img_writer.save_imgs(len(tasks) + idx_task, val_task, y_pred,  criterion(y_pred, test_y).detach().cpu().item())
 
-                    val_loss += criterion(y_pred, test_y)
-            val_loss /= batch_size
-            print('VAL LOSS', val_loss)
+        #             val_loss += criterion(y_pred, test_y)
+        #     val_loss /= batch_size
+        #     print('VAL LOSS', val_loss)
             
-        if e % 1 == 0:
-            epoch_loss /= (400/batch_size)
-            print('Loss:',epoch_loss.item())
-            training_info = {'epoch': e, 'train_loss': epoch_loss.item(), 'val_loss':val_loss.item()}
-            loss_writer.write_row(training_info)
+        # if e % 1 == 0:
+        #     epoch_loss /= (400/batch_size)
+        #     print('Loss:',epoch_loss.item())
+        #     training_info = {'epoch': e, 'train_loss': epoch_loss.item(), 'val_loss':val_loss.item()}
+        #     loss_writer.write_row(training_info)
             
-            model.train()
+        #     model.train()
             
         
 
