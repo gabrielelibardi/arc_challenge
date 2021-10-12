@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import multiprocessing as mp
 from torch.nn.parameter import Parameter
 
+from spectral_normalization import SpectralNorm
 
 class Print(nn.Module):
     def __init__(self):
@@ -42,15 +43,18 @@ class NARAutoencoder(nn.Module):
         # ENCODER
         self.convolutions_stacks_enc = nn.ModuleList([])
 
+        power_iterations = 5
+        lamb = 0.1
+
         for kernel in kernels:
             # I don't really know the size of the out channels..
             # Think about the padding later
             # Not sure they are using Tanh intra-layers or only at the end
             transition = nn.Sequential(
-                nn.Conv2d(num_states, 32, kernel_size=kernel, padding=0),     
+                SpectralNorm(nn.Conv2d(num_states, 32, kernel_size=kernel, padding=0), power_iterations=power_iterations, lamb = lamb),     
                 nn.Tanh(),
                 nn.Flatten(),
-                nn.Linear(32*(self.width -(kernel-1)) *(self.height-(kernel-1)), 256),
+                SpectralNorm(nn.Linear(32*(self.width -(kernel-1)) *(self.height-(kernel-1)), 256), power_iterations=power_iterations, lamb = lamb),
                 nn.Tanh()
             )
 
@@ -59,12 +63,12 @@ class NARAutoencoder(nn.Module):
         # So I guess the deciders output must be 10*256
         kernel_decider = 10
         self.decider_enc = nn.Sequential(
-                nn.Conv2d(num_states, 32, kernel_size=kernel_decider, padding=0),
+                SpectralNorm(nn.Conv2d(num_states, 32, kernel_size=kernel_decider, padding=0), power_iterations=power_iterations, lamb = lamb),
                 nn.Tanh(),
                 nn.Flatten(),
-                nn.Linear(32*(self.width -(kernel_decider-1)) *(self.height-(kernel_decider-1)), 2*10*32),
+                SpectralNorm(nn.Linear(32*(self.width -(kernel_decider-1)) *(self.height-(kernel_decider-1)), 2*10*32), power_iterations=power_iterations, lamb = lamb),
                 nn.Tanh(),
-                nn.Linear(2*10*32, 10*256),
+                SpectralNorm(nn.Linear(2*10*32, 10*256)),
                 nn.Tanh(),
                 FlattenCustom()
             )
@@ -77,10 +81,10 @@ class NARAutoencoder(nn.Module):
             # Think about the padding later
             # Not sure they are using Tanh intra-layers or only at the end
             transition = nn.Sequential(
-                nn.Linear(256, 32*(self.width -(kernel-1)) *(self.height-(kernel-1))),
+                SpectralNorm(nn.Linear(256, 32*(self.width -(kernel-1)) *(self.height-(kernel-1))), power_iterations=power_iterations, lamb = lamb),
                 nn.Tanh(),
                 nn.Unflatten(1, (32, (self.width -(kernel-1)), (self.height-(kernel-1)))),
-                nn.ConvTranspose2d(32, num_states, kernel_size=kernel, padding=0),
+                SpectralNorm(nn.ConvTranspose2d(32, num_states, kernel_size=kernel, padding=0), power_iterations=power_iterations, lamb = lamb),
                 nn.Sigmoid(),
             )
 
@@ -89,12 +93,12 @@ class NARAutoencoder(nn.Module):
         # So I guess the deciders output must be 10*256
         kernel_decider = 10
         self.decider_dec = nn.Sequential(
-                nn.Linear(256, 32),
+                SpectralNorm(nn.Linear(256, 32)),
                 nn.Tanh(),
-                nn.Linear(32, 32*(self.width -(kernel_decider-1)) *(self.height-(kernel_decider-1))),
+                SpectralNorm(nn.Linear(32, 32*(self.width -(kernel_decider-1)) *(self.height-(kernel_decider-1))), power_iterations=power_iterations, lamb = lamb),
                 nn.Tanh(),
                 nn.Unflatten(1, (32, (self.width -(kernel-1)), (self.height-(kernel-1)))),
-                nn.ConvTranspose2d(32, 10*num_states, kernel_size=kernel_decider, padding=0),
+                SpectralNorm(nn.ConvTranspose2d(32, 10*num_states, kernel_size=kernel_decider, padding=0), power_iterations=power_iterations, lamb = lamb),
                 nn.Tanh(),
                 nn.Unflatten(1, (10, num_states))
 

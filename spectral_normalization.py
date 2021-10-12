@@ -12,11 +12,12 @@ def l2normalize(v, eps=1e-12):
 
 
 class SpectralNorm(nn.Module):
-    def __init__(self, module, name='weight', power_iterations=1):
+    def __init__(self, module, name='weight', power_iterations=1, lamb = 0.001):
         super(SpectralNorm, self).__init__()
         self.module = module
         self.name = name
         self.power_iterations = power_iterations
+        self.lamb = lamb
         if not self._made_params():
             self._make_params()
 
@@ -34,8 +35,7 @@ class SpectralNorm(nn.Module):
         sigma = u.dot(w.view(height, -1).mv(v))
         # setattr takes the class self.module, find attribute 'weight' and sets it to value
         #setattr(self.module, self.name, w / sigma.expand_as(w))
-        lamb = 0.001
-        update_w =  lamb*sigma*torch.outer(u,v).view(w.shape)
+        update_w =  self.lamb*sigma*torch.outer(u,v).view(w.shape)
         setattr(self.module, self.name, w + update_w)
 
     def _made_params(self):
