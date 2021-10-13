@@ -60,9 +60,11 @@ def change_colors(sample, new_colors):
 
 def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = '', load_model=None):
     
-    nar = False
+    nar = True
     if nar:
-        model = NARAutoencoder(11).to(device)
+        power_iterations=10 
+        lamb = 0.4
+        model = NARAutoencoder(11, lamb, power_iterations).to(device)
     else:
         num_hiddens = 128
         num_residual_hiddens = 32
@@ -73,11 +75,13 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
 
         commitment_cost = 0.25
         decay = 0.99
+        power_iterations=10 
+        lamb = 0.4
 
         learning_rate = 1e-3
         model = VQVAE(num_hiddens, num_residual_layers, num_residual_hiddens,
               num_embeddings, embedding_dim, 
-              commitment_cost, decay)
+              commitment_cost, decay,  power_iterations, lamb)
 
     model = model.train()
     num_epochs = 1000000

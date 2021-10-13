@@ -32,7 +32,7 @@ class UnFlatten(nn.Module):
 
 
 class NARAutoencoder(nn.Module):
-    def __init__(self, num_states):
+    def __init__(self, num_states, lamb, power_iterations):
         super(NARAutoencoder, self).__init__()
 
         self.n_channels = num_states
@@ -43,18 +43,18 @@ class NARAutoencoder(nn.Module):
         # ENCODER
         self.convolutions_stacks_enc = nn.ModuleList([])
 
-        power_iterations = 5
-        lamb = 0.1
+        power_iterations = power_iterations
+        lamb = lamb
 
         for kernel in kernels:
             # I don't really know the size of the out channels..
             # Think about the padding later
             # Not sure they are using Tanh intra-layers or only at the end
             transition = nn.Sequential(
-                SpectralNorm(nn.Conv2d(num_states, 32, kernel_size=kernel, padding=0), power_iterations=power_iterations, lamb = lamb),     
+                SpectralNorm(nn.Conv2d(num_states, 32, kernel_size=kernel, padding=0), power_iterations=power_iterations, lamb=lamb),     
                 nn.Tanh(),
                 nn.Flatten(),
-                SpectralNorm(nn.Linear(32*(self.width -(kernel-1)) *(self.height-(kernel-1)), 256), power_iterations=power_iterations, lamb = lamb),
+                SpectralNorm(nn.Linear(32*(self.width -(kernel-1)) *(self.height-(kernel-1)), 256), power_iterations=power_iterations, lamb=lamb),
                 nn.Tanh()
             )
 
@@ -63,10 +63,10 @@ class NARAutoencoder(nn.Module):
         # So I guess the deciders output must be 10*256
         kernel_decider = 10
         self.decider_enc = nn.Sequential(
-                SpectralNorm(nn.Conv2d(num_states, 32, kernel_size=kernel_decider, padding=0), power_iterations=power_iterations, lamb = lamb),
+                SpectralNorm(nn.Conv2d(num_states, 32, kernel_size=kernel_decider, padding=0), power_iterations=power_iterations, lamb=lamb),
                 nn.Tanh(),
                 nn.Flatten(),
-                SpectralNorm(nn.Linear(32*(self.width -(kernel_decider-1)) *(self.height-(kernel_decider-1)), 2*10*32), power_iterations=power_iterations, lamb = lamb),
+                SpectralNorm(nn.Linear(32*(self.width -(kernel_decider-1)) *(self.height-(kernel_decider-1)), 2*10*32), power_iterations=power_iterations, lamb=lamb),
                 nn.Tanh(),
                 SpectralNorm(nn.Linear(2*10*32, 10*256)),
                 nn.Tanh(),
@@ -81,13 +81,13 @@ class NARAutoencoder(nn.Module):
             # Think about the padding later
             # Not sure they are using Tanh intra-layers or only at the end
             transition = nn.Sequential(
-                SpectralNorm(nn.Linear(256, 32*(self.width -(kernel-1)) *(self.height-(kernel-1))), power_iterations=power_iterations, lamb = lamb),
+                SpectralNorm(nn.Linear(256, 32*(self.width -(kernel-1)) *(self.height-(kernel-1))), power_iterations=power_iterations, lamb=lamb),
                 nn.Tanh(),
                 nn.Unflatten(1, (32, (self.width -(kernel-1)), (self.height-(kernel-1)))),
-                SpectralNorm(nn.ConvTranspose2d(32, num_states, kernel_size=kernel, padding=0), power_iterations=power_iterations, lamb = lamb),
+                SpectralNorm(nn.ConvTranspose2d(32, num_states, kernel_size=kernel, padding=0), power_iterations=power_iterations, lamb=lamb),
                 nn.Sigmoid(),
             )
-
+            
             self.convolutions_stacks_dec.append(transition)
 
         # So I guess the deciders output must be 10*256
@@ -95,10 +95,10 @@ class NARAutoencoder(nn.Module):
         self.decider_dec = nn.Sequential(
                 SpectralNorm(nn.Linear(256, 32)),
                 nn.Tanh(),
-                SpectralNorm(nn.Linear(32, 32*(self.width -(kernel_decider-1)) *(self.height-(kernel_decider-1))), power_iterations=power_iterations, lamb = lamb),
+                SpectralNorm(nn.Linear(32, 32*(self.width -(kernel_decider-1)) *(self.height-(kernel_decider-1))), power_iterations=power_iterations, lamb=lamb),
                 nn.Tanh(),
                 nn.Unflatten(1, (32, (self.width -(kernel-1)), (self.height-(kernel-1)))),
-                SpectralNorm(nn.ConvTranspose2d(32, 10*num_states, kernel_size=kernel_decider, padding=0), power_iterations=power_iterations, lamb = lamb),
+                SpectralNorm(nn.ConvTranspose2d(32, 10*num_states, kernel_size=kernel_decider, padding=0), power_iterations=power_iterations, lamb=lamb),
                 nn.Tanh(),
                 nn.Unflatten(1, (10, num_states))
 
@@ -111,6 +111,7 @@ class NARAutoencoder(nn.Module):
 
     def encode(self, x):
         concat_conv_outputs = []
+        # Maybe this part could be done in parallel
         for convolution_stack in self.convolutions_stacks_enc:
             out_conv = convolution_stack(x)
             concat_conv_outputs.append(out_conv.unsqueeze(1))
@@ -121,6 +122,7 @@ class NARAutoencoder(nn.Module):
 
     def decode(self, x):
         concat_conv_outputs = []
+        # Maybe this part could be done in parallel
         for convolution_stack in self.convolutions_stacks_dec:
             out_conv = convolution_stack(x)
             concat_conv_outputs.append(out_conv.unsqueeze(1))
@@ -131,6 +133,9 @@ class NARAutoencoder(nn.Module):
         return torch.sum(torch.mul(concat_conv_outputs_tensor, masks), dim=1)
 
 
+
+
+##### VQ-VAE ######
 
 
 class VectorQuantizer(nn.Module):
@@ -248,17 +253,18 @@ class VectorQuantizerEMA(nn.Module):
 
 
 class Residual(nn.Module):
-    def __init__(self, in_channels, num_hiddens, num_residual_hiddens):
+    def __init__(self, in_channels, num_hiddens, num_residual_hiddens, power_iterations, lamb):
         super(Residual, self).__init__()
         self._block = nn.Sequential(
             nn.ReLU(True),
-            nn.Conv2d(in_channels=in_channels,
+            SpectralNorm(nn.Conv2d(in_channels=in_channels,
                       out_channels=num_residual_hiddens,
-                      kernel_size=3, stride=1, padding=1, bias=False),
+                      kernel_size=3, stride=1, padding=1, bias=False), power_iterations=power_iterations, lamb = lamb),
             nn.ReLU(True),
-            nn.Conv2d(in_channels=num_residual_hiddens,
+            SpectralNorm(nn.Conv2d(in_channels=num_residual_hiddens,
                       out_channels=num_hiddens,
-                      kernel_size=1, stride=1, bias=False)
+                      kernel_size=1, stride=1, bias=False), power_iterations=power_iterations, lamb = lamb)
+            
         )
     
     def forward(self, x):
@@ -266,10 +272,10 @@ class Residual(nn.Module):
 
 
 class ResidualStack(nn.Module):
-    def __init__(self, in_channels, num_hiddens, num_residual_layers, num_residual_hiddens):
+    def __init__(self, in_channels, num_hiddens, num_residual_layers, num_residual_hiddens, power_iterations, lamb):
         super(ResidualStack, self).__init__()
         self._num_residual_layers = num_residual_layers
-        self._layers = nn.ModuleList([Residual(in_channels, num_hiddens, num_residual_hiddens)
+        self._layers = nn.ModuleList([Residual(in_channels, num_hiddens, num_residual_hiddens, power_iterations, lamb)
                              for _ in range(self._num_residual_layers)])
 
     def forward(self, x):
@@ -279,7 +285,7 @@ class ResidualStack(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, in_channels, num_hiddens, num_residual_layers, num_residual_hiddens):
+    def __init__(self, in_channels, num_hiddens, num_residual_layers, num_residual_hiddens, power_iterations, lamb):
         super(Encoder, self).__init__()
 
         # changed padding from 1 to 2 
@@ -287,18 +293,28 @@ class Encoder(nn.Module):
                                  out_channels=num_hiddens//2,
                                  kernel_size=4,
                                  stride=2, padding=2)
+
+        self._conv_1 =  SpectralNorm(self._conv_1, power_iterations=power_iterations, lamb = lamb)
+
         self._conv_2 = nn.Conv2d(in_channels=num_hiddens//2,
                                  out_channels=num_hiddens,
                                  kernel_size=4,
                                  stride=2, padding=1)
+
+        self._conv_2 =  SpectralNorm(self._conv_2, power_iterations=power_iterations, lamb = lamb)
+
         self._conv_3 = nn.Conv2d(in_channels=num_hiddens,
                                  out_channels=num_hiddens,
                                  kernel_size=3,
                                  stride=1, padding=1)
+        
+        self._conv_3 =  SpectralNorm(self._conv_3, power_iterations=power_iterations, lamb = lamb)
+
         self._residual_stack = ResidualStack(in_channels=num_hiddens,
                                              num_hiddens=num_hiddens,
                                              num_residual_layers=num_residual_layers,
-                                             num_residual_hiddens=num_residual_hiddens)
+                                             num_residual_hiddens=num_residual_hiddens, 
+                                             power_iterations=power_iterations, lamb = lamb)
 
     def forward(self, inputs):
         x = self._conv_1(inputs)
@@ -313,29 +329,37 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, in_channels, num_hiddens, num_residual_layers, num_residual_hiddens):
+    def __init__(self, in_channels, num_hiddens, num_residual_layers, num_residual_hiddens, power_iterations, lamb):
         super(Decoder, self).__init__()
         
         self._conv_1 = nn.Conv2d(in_channels=in_channels,
                                  out_channels=num_hiddens,
                                  kernel_size=3, 
                                  stride=1, padding=1)
+
+        self._conv_1  = SpectralNorm(self._conv_1, power_iterations=power_iterations, lamb = lamb)
         
         self._residual_stack = ResidualStack(in_channels=num_hiddens,
                                              num_hiddens=num_hiddens,
                                              num_residual_layers=num_residual_layers,
-                                             num_residual_hiddens=num_residual_hiddens)
+                                             num_residual_hiddens=num_residual_hiddens, 
+                                             power_iterations=power_iterations, lamb = lamb)
+        
         
         self._conv_trans_1 = nn.ConvTranspose2d(in_channels=num_hiddens, 
                                                 out_channels=num_hiddens//2,
                                                 kernel_size=4, 
                                                 stride=2, padding=1)
+
+        self._conv_trans_1 = SpectralNorm(self._conv_trans_1, power_iterations=power_iterations, lamb = lamb)
         
         # cahnged padding from 1 to 2 from original implementation, adn channel number changed from 3 sto 11
         self._conv_trans_2 = nn.ConvTranspose2d(in_channels=num_hiddens//2, 
                                                 out_channels=11,
                                                 kernel_size=4, 
                                                 stride=2, padding=2)
+
+        self._conv_trans_2 = SpectralNorm(self._conv_trans_2, power_iterations=power_iterations, lamb = lamb)
 
     def forward(self, inputs):
         x = self._conv_1(inputs)
@@ -350,17 +374,20 @@ class Decoder(nn.Module):
 
 class VQVAE(nn.Module):
     def __init__(self, num_hiddens, num_residual_layers, num_residual_hiddens, 
-                 num_embeddings, embedding_dim, commitment_cost, decay=0):
+                 num_embeddings, embedding_dim, commitment_cost, decay=0, power_iterations=1, lamb = 0.1):
         super(VQVAE, self).__init__()
         
         # channels number has been changed
         self._encoder = Encoder(11, num_hiddens,
                                 num_residual_layers, 
-                                num_residual_hiddens)
+                                num_residual_hiddens, 
+                                power_iterations, lamb)
+
         self._pre_vq_conv = nn.Conv2d(in_channels=num_hiddens, 
                                       out_channels=embedding_dim,
                                       kernel_size=1, 
                                       stride=1)
+        self._pre_vq_conv = SpectralNorm(self._pre_vq_conv, power_iterations=power_iterations, lamb = lamb)
         if decay > 0.0:
             self._vq_vae = VectorQuantizerEMA(num_embeddings, embedding_dim, 
                                               commitment_cost, decay)
@@ -370,7 +397,8 @@ class VQVAE(nn.Module):
         self._decoder = Decoder(embedding_dim,
                                 num_hiddens, 
                                 num_residual_layers, 
-                                num_residual_hiddens)
+                                num_residual_hiddens,
+                                power_iterations, lamb)
 
     def forward(self, x):
         z = self._encoder(x)
