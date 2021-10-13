@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from data_loader import DatasetARC, DatasetARC_Test
 from models import CAModel, CAModelConvLSTM, MetaConvLSTM_CA
-from nar_autoencoder import NARAutoencoder
+from autoencoders import NARAutoencoder, VQVAE
 import torch.nn as nn
 import torch.nn.functional as F
 from utils import inp2img, LossWriter, img_logger, save_model
@@ -60,14 +60,25 @@ def change_colors(sample, new_colors):
 
 def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = '', load_model=None):
     
-    # if recurrent:
-    #     model = MetaConvLSTM_CA(11).to(device)
-    # else:
-    #     model = CAModel(11).to(device)
-        
-    # if load_model:
-    #     model.load_state_dict(torch.load(load_model, map_location=device))
-    model = NARAutoencoder(11).to(device) 
+    nar = False
+    if nar:
+        model = NARAutoencoder(11).to(device)
+    else:
+        num_hiddens = 128
+        num_residual_hiddens = 32
+        num_residual_layers = 2
+
+        embedding_dim = 64
+        num_embeddings = 512
+
+        commitment_cost = 0.25
+        decay = 0.99
+
+        learning_rate = 1e-3
+        model = VQVAE(num_hiddens, num_residual_layers, num_residual_hiddens,
+              num_embeddings, embedding_dim, 
+              commitment_cost, decay)
+
     model = model.train()
     num_epochs = 1000000
     batch_size = 20
@@ -89,11 +100,15 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
             test_x = torch.from_numpy(inp2img(task['test'][0]['input'])).unsqueeze(0).float().to(device)
             test_y = torch.from_numpy(task['test'][0]['output']).unsqueeze(0).long().to(device)
             # for now we don't include test_x in the autoencoder training
-            y_pred = model(X)
-            
+            if nar:
+                y_pred = model(X)
+
+            else:
+                vqloss, y_pred, preplexity = model(X)
+                y_pred = torch.sigmoid(y_pred)
+
             loss = criterion(y_pred, X)
             loss.backward()
-            #import ipdb; ipdb.set_trace()
 
             if ii % batch_size == 0:
                 print(loss)
