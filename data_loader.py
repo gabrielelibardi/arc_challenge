@@ -17,7 +17,7 @@ class DatasetARC(Dataset):
         train_path = data_path / 'training'
         self.train_tasks = [json.load(task.open()) for task in train_path.iterdir() ]
         # add filter grid size
-
+        self.train_tasks= filter_size(self.train_tasks, max_size=10)
         augmented_tasks = augment(self.train_tasks)
         self.train_tasks += augmented_tasks
         self.max_cols, self.max_rows = check_max_rows_cols(self.train_tasks)
@@ -42,6 +42,7 @@ class DatasetARC_Test(Dataset):
         
         test_path = data_path / 'evaluation'
         self.test_tasks = [json.load(task.open()) for task in test_path.iterdir() ]
+        self.test_tasks = filter_size(self.test_tasks , max_size=10)
         self.max_cols, self.max_rows = check_max_rows_cols(self.test_tasks)
         print(self.max_cols, self.max_rows)
         pad_all_tensors(self.test_tasks, self.max_cols, self.max_rows)

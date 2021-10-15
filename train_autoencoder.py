@@ -12,6 +12,11 @@ import argparse
 import json
 import random
 from copy import copy
+import wandb
+from utils import plot_sample, clean_borders
+import matplotlib.pyplot as plt
+from matplotlib import colors
+
 
 """ This script is to train the VQ-VAE and the Neural Abstract Reasoner autoencoders with Spectral Regularization
     TO DO:
@@ -19,6 +24,28 @@ from copy import copy
     - Find a way to turn off/on the padding
     - Add permutations of the colors
 """
+cmap = colors.ListedColormap(
+        ['#000000', '#0074D9','#FF4136','#2ECC40','#FFDC00',
+         '#AAAAAA', '#F012BE', '#FF851B', '#7FDBFF', '#870C25'])
+
+norm = colors.Normalize(vmin=0, vmax=9)
+
+
+def save_imgs_wandb(pred, x, caption_str):
+
+    for index in range(x.shape[0]):
+
+        fig, ax = plt.subplots()
+        original_im = ax.imshow(x[index].argmax(0).cpu().numpy(), cmap=cmap, norm=norm)
+
+        fig_2, ax_2 = plt.subplots()
+        prediction_im = ax_2.imshow(pred[index].argmax(0).cpu().numpy(), cmap=cmap, norm=norm)
+
+        wandb.log({caption_str + ' log images': [wandb.Image(original_im, caption="Original Image"), 
+            wandb.Image(prediction_im, caption="Prediction")]})
+        
+        plt.close()
+    
 
 def solve_tasks(tasks):
     for task in tasks:
@@ -58,12 +85,11 @@ def change_colors(sample, new_colors):
 
 
 
-def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = '', load_model=None):
-    
-    nar = True
+def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = '', load_model=None, num_epochs=1000, batch_size=16, lr=0.0001, lamb=0.01, nar=False):
+
     if nar:
         power_iterations=10 
-        lamb = 0.4
+
         model = NARAutoencoder(11, lamb, power_iterations).to(device)
     else:
         num_hiddens = 128
@@ -76,7 +102,7 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
         commitment_cost = 0.25
         decay = 0.99
         power_iterations=10 
-        lamb = 0.4
+
 
         learning_rate = 1e-3
         model = VQVAE(num_hiddens, num_residual_layers, num_residual_hiddens,
@@ -84,63 +110,86 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
               commitment_cost, decay,  power_iterations, lamb)
 
     model = model.train()
-    num_epochs = 1000000
-    batch_size = 20
+
     criterion = nn.BCELoss()
-    loss_writer = LossWriter(log_dir, fieldnames = ('epoch','train_loss', 'val_loss'))
+
     img_writer = img_logger(log_dir)
-    losses = np.zeros((max_steps - 1) * num_epochs)
+
+    wandb.init(entity='gabrielelibardi', project ='arc')
+    
+    wandb.config.epochs = num_epochs
+    wandb.config.lr = lr
+    wandb.config.bs = batch_size
+    wandb.config.nar = nar
+
+    wandb.config.log_dir = log_dir
+    
+    wandb.run.name = log_dir
+    wandb.run.save()
     
     for e in range(num_epochs):
-        optimizer = torch.optim.Adam(model.parameters(), lr=(0.0001))
+        model.train()
+        optimizer = torch.optim.Adam(model.parameters(), lr=(lr))
         optimizer.zero_grad()
         loss = 0.0
         epoch_loss = 0.0
         rand_idxs = random.sample(range(0, len(tasks)), len(tasks)) 
         for ii, idx_task in enumerate(rand_idxs):
             task = tasks[idx_task]
-            task = permute_colors(task)
+            #task = permute_colors(task)
             X = torch.cat([object_in_tuple for sample in task['train']  for object_in_tuple in tensorize_concatenate(sample, device) ], dim=0)
             test_x = torch.from_numpy(inp2img(task['test'][0]['input'])).unsqueeze(0).float().to(device)
             test_y = torch.from_numpy(task['test'][0]['output']).unsqueeze(0).long().to(device)
             # for now we don't include test_x in the autoencoder training
             if nar:
                 y_pred = model(X)
+                loss = criterion(y_pred, X)
 
             else:
                 vqloss, y_pred, preplexity = model(X)
                 y_pred = torch.sigmoid(y_pred)
+                loss = criterion(y_pred, X)
+                loss += vqloss
 
-            loss = criterion(y_pred, X)
             loss.backward()
 
             if ii % batch_size == 0:
-                print(loss)
+                wandb.log({'training loss': loss, 'epoch': e})
                 optimizer.step()
                 optimizer.zero_grad()
                 loss = 0.0
+        
+        save_imgs_wandb(y_pred, X, 'training')
 
         # if e % 100 == 0:
         #     save_model(model, os.path.join(log_dir + "/models/","arc.state_dict"), e)
             
-        # if e % 10 == 0:
-        #     ## EVALUATE
-        #     model.eval()
-        #     val_loss = 0.0
-        #     rand_idxs = random.sample(range(0, len(val_tasks)), len(val_tasks))
-        #     with torch.no_grad():
-        #         for ii, idx_task in enumerate(rand_idxs):
-        #             val_task = val_tasks[idx_task]
-        #             X = torch.cat([tensorize_concatenate(sample, device) for sample in val_task['train']], dim=0)
-        #             test_x = torch.from_numpy(inp2img(val_task['test'][0]['input'])).unsqueeze(0).float().to(device)
-        #             test_y = torch.from_numpy(val_task['test'][0]['output']).unsqueeze(0).long().to(device)
-        #             y_pred = model(X, test_x, max_steps)
-        #             if e % 100 == 0:
-        #                 img_writer.save_imgs(len(tasks) + idx_task, val_task, y_pred,  criterion(y_pred, test_y).detach().cpu().item())
+        if e % 2 == 0:
+            ## EVALUATE
+            model.eval()
+            val_loss = 0.0
+            rand_idxs = random.sample(range(0, len(val_tasks)), len(val_tasks))
+            with torch.no_grad():
+                for ii, idx_task in enumerate(rand_idxs):
+                    task = val_tasks[idx_task]
 
-        #             val_loss += criterion(y_pred, test_y)
-        #     val_loss /= batch_size
-        #     print('VAL LOSS', val_loss)
+                    X = torch.cat([object_in_tuple for sample in task['train']  for object_in_tuple in tensorize_concatenate(sample, device) ], dim=0)
+                    test_x = torch.from_numpy(inp2img(task['test'][0]['input'])).unsqueeze(0).float().to(device)
+                    test_y = torch.from_numpy(task['test'][0]['output']).unsqueeze(0).long().to(device)
+                    # for now we don't include test_x in the autoencoder training
+                    if nar:
+                        y_pred = model(X)
+                        val_loss += criterion(y_pred, X)
+
+                    else:
+                        vqloss, y_pred, preplexity = model(X)
+                        y_pred = torch.sigmoid(y_pred)
+
+                        val_loss += criterion(y_pred, X) + vqloss
+
+            wandb.log({'val loss': val_loss/len(val_tasks), 'epoch': e})
+            save_imgs_wandb(y_pred, X, 'val')
+            
             
         # if e % 1 == 0:
         #     epoch_loss /= (400/batch_size)
@@ -150,21 +199,31 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
             
         #     model.train()
             
-        
-
     print('------------------FINAL LOSS:', loss, '-------------------------------')      
-    return model, num_steps, losses
+    return model
 
 def get_args():
     parser = argparse.ArgumentParser(description='ARC')
     parser.add_argument(
         '--lr', type=float, default=7e-4, help='learning rate (default: 7e-4)')
     parser.add_argument(
+        '--epochs', type=int, default=1000, help='number of epochs')
+    parser.add_argument(
+        '--batch-size', type=int, default=16, help='number of epochs')
+    parser.add_argument(
+        '--nar', default=False, action='store_true', help='Use the NAR autoencoder or the VQ-VAE autoencoder')
+    parser.add_argument(
+        '--lamb', type=float, default=0.001, help='Lambda parameter for the Spectral Regularization')
+    parser.add_argument(
         '--log-dir',default='',help='Log dir')
     parser.add_argument(
         '--data-dir',default='data/abstraction-and-reasoning-challenge',help='Log dir') 
     parser.add_argument(
         '--load-model',default=None,help='directory with the dir to load the model') 
+    parser.add_argument(
+        '--permute-colors',default=False, action='store_true', help='sample radnom color permutations when learning') 
+    parser.add_argument(
+        '--max-gird',default=10, type=int, help='max size of the grid used in training') 
     
     args = parser.parse_args() 
     
@@ -189,5 +248,5 @@ if __name__ == '__main__':
     train_tasks = DatasetARC(args.data_dir)
     test_tasks = DatasetARC_Test(args.data_dir)
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    meta_solve_task(train_tasks, test_tasks, log_dir = args.log_dir,load_model = args.load_model)
+    meta_solve_task(train_tasks, test_tasks, log_dir = args.log_dir, load_model = args.load_model, num_epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, lamb=args.lamb, nar=args.nar)
     

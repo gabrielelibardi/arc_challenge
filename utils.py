@@ -65,6 +65,26 @@ class img_logger(object):
         log_dir = self.log_dir + '/imgs/'
         json.dump(imgs_dict, open(os.path.join(log_dir, 'imgs_' + str(num_img)+ ".json"), "w"), indent=4)
 
+class img_logger_autoencoder(object):
+    def __init__(self, log_dir):
+        self.log_dir = log_dir
+
+    def save_imgs(self, num_img, samples, pred, loss):
+        samples = copy.deepcopy(samples)
+        pred = pred.clone()
+        imgs_dict = {}  
+        for idx1,sample in enumerate(samples['train']):
+            samples['train'][idx1]['input'] = clean_borders(sample['input']).tolist()
+            samples['train'][idx1]['output'] = clean_borders(sample['output']).tolist()
+            
+        for idx2,sample in enumerate(samples['test']):
+            samples['test'][idx2]['input'] = clean_borders(sample['input']).tolist()
+            samples['test'][idx2]['output'] = clean_borders(sample['output']).tolist()
+        pred = pred.argmax(1).squeeze().cpu().numpy().tolist()
+        imgs_dict = {'sample': samples, 'pred':pred, 'loss': loss}
+        log_dir = self.log_dir + '/imgs/'
+        json.dump(imgs_dict, open(os.path.join(log_dir, 'imgs_' + str(num_img)+ ".json"), "w"), indent=4)
+
 class LossWriter(object):
     def __init__(self, log_dir, fieldnames = ('l'), header=''):
         
@@ -125,7 +145,40 @@ def plot_sample(sample, predict=None):
         plot_pictures([sample['input'], sample['output']], ['Input', 'Output'])
     else:
         plot_pictures([sample['input'], sample['output'], predict], ['Input', 'Output', 'Predict'])
-            
+
+
+def filter_size(data, max_size=30):
+    new_data = []
+    
+    for task in data:
+        max_cols_task = 0
+        max_rows_task = 0
+        for sample in task['train']:
+
+            x = torch.Tensor(sample['input'])
+            y = torch.Tensor(sample['output'])
+
+            max_cols_task = max(max_cols_task, x.shape[0], y.shape[0])
+            max_rows_task = max(max_rows_task, x.shape[1], y.shape[1])
+
+        for sample in task['test']:
+
+            x = torch.Tensor(sample['input'])
+            y = torch.Tensor(sample['output'])
+
+            max_cols_task = max(max_cols_task, x.shape[0], y.shape[0])
+            max_rows_task = max(max_rows_task, x.shape[1], y.shape[1])
+
+            max_cols_task = max(max_cols_task, x.shape[0], y.shape[0])
+            max_rows_task = max(max_rows_task, x.shape[1], y.shape[1])
+        
+        if max_cols_task <= max_size and max_rows_task <= max_size:
+            new_data.append(task)
+
+    return new_data
+
+
+
 
 def check_max_rows_cols(data):
     max_cols = 0
