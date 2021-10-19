@@ -26,26 +26,24 @@ from matplotlib import colors
 """
 cmap = colors.ListedColormap(
         ['#000000', '#0074D9','#FF4136','#2ECC40','#FFDC00',
-         '#AAAAAA', '#F012BE', '#FF851B', '#7FDBFF', '#870C25'])
+         '#AAAAAA', '#F012BE', '#FF851B', '#7FDBFF', '#870C25', '#3d9970' ])
 
-norm = colors.Normalize(vmin=0, vmax=9)
+norm = colors.Normalize(vmin=0, vmax=10)
 
 
 def save_imgs_wandb(pred, x, caption_str):
 
     for index in range(x.shape[0]):
 
-        fig, ax = plt.subplots()
-        original_im = ax.imshow(x[index].argmax(0).cpu().numpy(), cmap=cmap, norm=norm)
+        original_im = plt.imshow(x[index].argmax(0).cpu().numpy(), cmap=cmap, norm=norm)
+        plt.close('all')
 
-        fig_2, ax_2 = plt.subplots()
-        prediction_im = ax_2.imshow(pred[index].argmax(0).cpu().numpy(), cmap=cmap, norm=norm)
+        prediction_im = plt.imshow(pred[index].argmax(0).cpu().numpy(), cmap=cmap, norm=norm)
+        plt.close('all')
 
         wandb.log({caption_str + ' log images': [wandb.Image(original_im, caption="Original Image"), 
             wandb.Image(prediction_im, caption="Prediction")]})
-        
-        plt.close()
-    
+            
 
 def solve_tasks(tasks):
     for task in tasks:
@@ -58,6 +56,13 @@ def tensorize_concatenate(sample, device):
     #cat = torch.cat([x,y], dim= 1)
     return x, y
 
+
+def random_permutations(l, n):    
+    pset = set()
+    while len(pset) < n:
+        random.shuffle(l)
+        pset.add(tuple(l))
+    return pset
 
 def permute_colors(task):
 
@@ -89,7 +94,6 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
 
     if nar:
         power_iterations=10 
-
         model = NARAutoencoder(11, lamb, power_iterations).to(device)
     else:
         num_hiddens = 128
@@ -113,8 +117,6 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
 
     criterion = nn.BCELoss()
 
-    img_writer = img_logger(log_dir)
-
     wandb.init(entity='gabrielelibardi', project ='arc')
     
     wandb.config.epochs = num_epochs
@@ -134,17 +136,19 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
         loss = 0.0
         epoch_loss = 0.0
         rand_idxs = random.sample(range(0, len(tasks)), len(tasks)) 
+        perfect_scores = 0.0
         for ii, idx_task in enumerate(rand_idxs):
             task = tasks[idx_task]
-            #task = permute_colors(task)
             X = torch.cat([object_in_tuple for sample in task['train']  for object_in_tuple in tensorize_concatenate(sample, device) ], dim=0)
             test_x = torch.from_numpy(inp2img(task['test'][0]['input'])).unsqueeze(0).float().to(device)
             test_y = torch.from_numpy(task['test'][0]['output']).unsqueeze(0).long().to(device)
             # for now we don't include test_x in the autoencoder training
             if nar:
                 y_pred = model(X)
+                y_pred = torch.clamp(y_pred, min=0.0, max = 1.0)
                 loss = criterion(y_pred, X)
-
+                if loss == 0.0:
+                    perfect_scores += X.shape[0]
             else:
                 vqloss, y_pred, preplexity = model(X)
                 y_pred = torch.sigmoid(y_pred)
@@ -154,18 +158,24 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
             loss.backward()
 
             if ii % batch_size == 0:
-                wandb.log({'training loss': loss, 'epoch': e})
                 optimizer.step()
                 optimizer.zero_grad()
-                loss = 0.0
-        
-        save_imgs_wandb(y_pred, X, 'training')
+                wandb.log({'training loss': loss, 'epoch': e})
 
-        # if e % 100 == 0:
-        #     save_model(model, os.path.join(log_dir + "/models/","arc.state_dict"), e)
+
+            if ii % batch_size*100 == 0:
+                save_imgs_wandb(torch.clone(y_pred), torch.clone(X), 'training')
+                
+        if e % 5 == 0:
+            save_model(model, os.path.join(log_dir + "/models/","arc.state_dict"), e)
+
+        if e %1 == 0:
+            wandb.log({'training perfect scores': perfect_scores, 'epoch': e})
+            perfect_scores = 0.0
             
-        if e % 2 == 0:
+        if e % 1 == 0:
             ## EVALUATE
+            val_perfect_scores = 0.0
             model.eval()
             val_loss = 0.0
             rand_idxs = random.sample(range(0, len(val_tasks)), len(val_tasks))
@@ -179,7 +189,10 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
                     # for now we don't include test_x in the autoencoder training
                     if nar:
                         y_pred = model(X)
+                        y_pred = torch.clamp(y_pred, min=0.0, max = 1.0)
                         val_loss += criterion(y_pred, X)
+                        if val_loss == 0.0:
+                            val_perfect_scores += X.shape[0]
 
                     else:
                         vqloss, y_pred, preplexity = model(X)
@@ -189,6 +202,7 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
 
             wandb.log({'val loss': val_loss/len(val_tasks), 'epoch': e})
             save_imgs_wandb(y_pred, X, 'val')
+            wandb.log({'val perfect scores': val_perfect_scores, 'epoch': e})
             
             
         # if e % 1 == 0:
@@ -245,8 +259,9 @@ if __name__ == '__main__':
     os.system("mkdir "+ args.log_dir + "/models")
     os.system("mkdir "+ args.log_dir + "/imgs")
 
-    train_tasks = DatasetARC(args.data_dir)
+    train_tasks = DatasetARC(args.data_dir, number_permutations=10)
     test_tasks = DatasetARC_Test(args.data_dir)
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    print(device)
     meta_solve_task(train_tasks, test_tasks, log_dir = args.log_dir, load_model = args.load_model, num_epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, lamb=args.lamb, nar=args.nar)
     

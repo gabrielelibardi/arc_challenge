@@ -9,6 +9,7 @@ from shutil import copy2
 from matplotlib import colors
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
+import random
 
 
 def augment(tasks):
@@ -177,8 +178,45 @@ def filter_size(data, max_size=30):
 
     return new_data
 
+def random_permutations(l, n):    
+    pset = set()
+    while len(pset) < n:
+        random.shuffle(l)
+        pset.add(tuple(l))
+    return pset
 
+def permute_colors(data):
+    l = [0,1,2,3,4,5,6,7,8,9]
+    colors_permutations = random_permutations(l, 1000)
+    new_data = []
 
+    for new_colors in colors_permutations:
+    # last color 10 is the alpha channel deciding what should be considered as task, that one should not be permuted
+        col_dict = {old_col:new_col for  old_col, new_col in enumerate(new_colors)}
+        for task in data:
+            max_cols_task = 0
+            max_rows_task = 0
+            new_task = {'train':[], 'test':[]}
+            for sample in task['train']:
+                new_task['train'].append(change_colors(sample.copy(), col_dict))
+            for sample in task['test']:
+                new_task['test'].append(change_colors(sample.copy(), col_dict))
+            
+            new_data.append(new_task)
+
+    return new_data
+
+def change_colors(sample, col_dict):
+    sample['input'] = sample['input'].tolist()
+    sample['output'] = sample['output'].tolist()
+
+    new_sample = {}
+    #import ipdb; ipdb.set_trace()
+    #print(sample['input'], sample['output'])
+    new_sample['input']  =  np.array([[col_dict[k] for k in lst] for lst in sample['input'].copy()])
+    new_sample['output']  = np.array([[col_dict[k] for k in lst] for lst in sample['output'].copy()])
+    
+    return new_sample
 
 def check_max_rows_cols(data):
     max_cols = 0
@@ -186,7 +224,6 @@ def check_max_rows_cols(data):
     
     for task in data:
         for sample in task['train']:
-
             x = torch.Tensor(sample['input'])
             y = torch.Tensor(sample['output'])
 

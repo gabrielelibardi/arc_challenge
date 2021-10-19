@@ -68,7 +68,7 @@ class NARAutoencoder(nn.Module):
                 nn.Flatten(),
                 SpectralNorm(nn.Linear(128*(self.width -(kernel_decider-1)) *(self.height-(kernel_decider-1)), 128), power_iterations=power_iterations, lamb=lamb),
                 nn.Tanh(),
-                SpectralNorm(nn.Linear(128, 10*256)),
+                SpectralNorm(nn.Linear(128, 10*256), power_iterations=power_iterations, lamb=lamb),
                 nn.Tanh(),
                 FlattenCustom()
             )
