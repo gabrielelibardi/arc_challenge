@@ -20,11 +20,13 @@ class DatasetARC(Dataset):
         self.train_tasks = [json.load(task.open()) for task in train_path.iterdir() ]
         # add filter grid size
         self.train_tasks= filter_size(self.train_tasks, max_size=10)
+        print('Total Number Training Tasks:', len(self.train_tasks))
         #self.train_tasks += permute_colors(self.train_tasks)
         #print('added permutations')
         augmented_tasks = augment(self.train_tasks)
         print('added augmentation')
         self.train_tasks += augmented_tasks
+        print('Total Number Training Tasks with augmentation:', len(self.train_tasks))
         self.max_cols, self.max_rows = check_max_rows_cols(self.train_tasks)
         pad_all_tensors(self.train_tasks, self.max_cols, self.max_rows)
 
@@ -63,7 +65,9 @@ class DatasetARC_Test(Dataset):
         
         test_path = data_path / 'evaluation'
         self.test_tasks = [json.load(task.open()) for task in test_path.iterdir() ]
+        print(len(self.test_tasks))
         self.test_tasks = filter_size(self.test_tasks , max_size=10)
+        print('Total Number Validation Tasks:', len(self.test_tasks))
         self.max_cols, self.max_rows = check_max_rows_cols(self.test_tasks)
         print(self.max_cols, self.max_rows)
         pad_all_tensors(self.test_tasks, self.max_cols, self.max_rows)

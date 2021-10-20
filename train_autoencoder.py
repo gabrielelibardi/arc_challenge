@@ -11,7 +11,7 @@ import sys
 import argparse
 import json
 import random
-from copy import copy
+import copy
 import wandb
 from utils import plot_sample, clean_borders
 import matplotlib.pyplot as plt
@@ -147,7 +147,7 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
                 y_pred = model(X)
                 y_pred = torch.clamp(y_pred, min=0.0, max = 1.0)
                 loss = criterion(y_pred, X)
-                if loss == 0.0:
+                if (y_pred.argmax(1) == X.argmax(1)).all():
                     perfect_scores += X.shape[0]
             else:
                 vqloss, y_pred, preplexity = model(X)
@@ -169,13 +169,24 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
         if e % 5 == 0:
             save_model(model, os.path.join(log_dir + "/models/","arc.state_dict"), e)
 
-        if e %1 == 0:
-            wandb.log({'training perfect scores': perfect_scores, 'epoch': e})
+        if e % 1 == 0 and e != 0:
+            wandb.log({'training perfect scores': perfect_scores})
             perfect_scores = 0.0
+            lamb_decay = True
+            if lamb_decay:
+                if nar:
+                    power_iterations=10 
+                    lamb /= 10 
+                    old_model_dict = copy.deepcopy(model.state_dict())
+                    model = NARAutoencoder(11, lamb, power_iterations).to(device)
+                    model.load_state_dict(old_model_dict)
+                    print('New lambda', lamb)
+
             
         if e % 1 == 0:
             ## EVALUATE
             val_perfect_scores = 0.0
+            full_perfect_score = 0.0
             model.eval()
             val_loss = 0.0
             rand_idxs = random.sample(range(0, len(val_tasks)), len(val_tasks))
@@ -191,8 +202,9 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
                         y_pred = model(X)
                         y_pred = torch.clamp(y_pred, min=0.0, max = 1.0)
                         val_loss += criterion(y_pred, X)
-                        if val_loss == 0.0:
+                        if (y_pred.argmax(1) == X.argmax(1)).all():
                             val_perfect_scores += X.shape[0]
+                        full_perfect_score += X.shape[0]
 
                     else:
                         vqloss, y_pred, preplexity = model(X)
@@ -200,9 +212,10 @@ def meta_solve_task(tasks, val_tasks, max_steps=20, recurrent=True, log_dir = ''
 
                         val_loss += criterion(y_pred, X) + vqloss
 
+            print(val_perfect_scores, 'of', full_perfect_score)
             wandb.log({'val loss': val_loss/len(val_tasks), 'epoch': e})
             save_imgs_wandb(y_pred, X, 'val')
-            wandb.log({'val perfect scores': val_perfect_scores, 'epoch': e})
+            wandb.log({'val perfect scores': val_perfect_scores})
             
             
         # if e % 1 == 0:
